@@ -1,0 +1,328 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Multi-tenant support
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String
+  subdomain   String   @unique
+  domain      String?
+  status      TenantStatus @default(ACTIVE)
+  plan        TenantPlan @default(BASIC)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  users       User[]
+  warehouses  Warehouse[]
+  products    Product[]
+  orders      Order[]
+  inventory   InventoryItem[]
+  payments    Payment[]
+  
+  @@map("tenants")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String
+  role      UserRole @default(EMPLOYEE)
+  status    UserStatus @default(ACTIVE)
+  tenantId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments EmployeeAssignment[]
+  createdOrders Order[] @relation("OrderCreatedBy")
+  updatedOrders Order[] @relation("OrderUpdatedBy")
+  
+  @@map("users")
+}
+
+model Warehouse {
+  id          String   @id @default(cuid())
+  name        String
+  address     String
+  city        String
+  postalCode  String
+  country     String
+  status      WarehouseStatus @default(ACTIVE)
+  tenantId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventory   InventoryItem[]
+  assignments EmployeeAssignment[]
+  orders      Order[]
+  
+  @@map("warehouses")
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  sku         String
+  name        String
+  description String?
+  category    String?
+  price       Decimal? @db.Decimal(10,2)
+  weight      Decimal? @db.Decimal(8,3)
+  dimensions  Json?    // {length, width, height}
+  status      ProductStatus @default(ACTIVE)
+  tenantId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventory   InventoryItem[]
+  orderItems  OrderItem[]
+  
+  @@unique([sku, tenantId])
+  @@map("products")
+}
+
+model InventoryItem {
+  id           String   @id @default(cuid())
+  productId    String
+  warehouseId  String
+  quantity     Int      @default(0)
+  reservedQty  Int      @default(0)
+  minLevel     Int      @default(0)
+  maxLevel     Int?
+  location     String?  // Warehouse location/bin
+  batchNumber  String?
+  expiryDate   DateTime?
+  tenantId     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  // Relations
+  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product     Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  movements   InventoryMovement[]
+  
+  @@unique([productId, warehouseId, batchNumber])
+  @@map("inventory_items")
+}
+
+model InventoryMovement {
+  id              String   @id @default(cuid())
+  inventoryItemId String
+  type            MovementType
+  quantity        Int
+  reference       String?  // Order ID, Receipt ID, etc.
+  notes           String?
+  tenantId        String
+  createdAt       DateTime @default(now())
+  
+  // Relations
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  
+  @@map("inventory_movements")
+}
+
+model Order {
+  id           String   @id @default(cuid())
+  orderNumber  String
+  type         OrderType
+  status       OrderStatus @default(PENDING)
+  priority     OrderPriority @default(NORMAL)
+  warehouseId  String
+  customerId   String?
+  customerName String?
+  customerEmail String?
+  shippingAddress Json?
+  billingAddress  Json?
+  totalAmount  Decimal? @db.Decimal(10,2)
+  notes        String?
+  createdById  String
+  updatedById  String?
+  tenantId     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  // Relations
+  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  createdBy   User @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  updatedBy   User? @relation("OrderUpdatedBy", fields: [updatedById], references: [id])
+  items       OrderItem[]
+  payments    Payment[]
+  
+  @@unique([orderNumber, tenantId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  productId String
+  quantity  Int
+  unitPrice Decimal? @db.Decimal(10,2)
+  totalPrice Decimal? @db.Decimal(10,2)
+  status    OrderItemStatus @default(PENDING)
+  
+  // Relations
+  order     Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id])
+  
+  @@map("order_items")
+}
+
+model EmployeeAssignment {
+  id          String   @id @default(cuid())
+  userId      String
+  warehouseId String
+  role        WarehouseRole @default(WORKER)
+  startDate   DateTime @default(now())
+  endDate     DateTime?
+  status      AssignmentStatus @default(ACTIVE)
+  
+  // Relations
+  user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, warehouseId])
+  @@map("employee_assignments")
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  orderId         String?
+  tenantId        String
+  amount          Decimal  @db.Decimal(10,2)
+  currency        String   @default("PLN")
+  status          PaymentStatus @default(PENDING)
+  method          PaymentMethod
+  hotpayId        String?  // HotPay transaction ID
+  hotpayResponse  Json?    // Full HotPay response
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  tenant          Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order           Order? @relation(fields: [orderId], references: [id])
+  
+  @@map("payments")
+}
+
+// Enums
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  INACTIVE
+}
+
+enum TenantPlan {
+  BASIC
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  EMPLOYEE
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum WarehouseStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  DISCONTINUED
+}
+
+enum MovementType {
+  IN
+  OUT
+  TRANSFER
+  ADJUSTMENT
+}
+
+enum OrderType {
+  INBOUND
+  OUTBOUND
+  TRANSFER
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PICKING
+  PACKED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum OrderPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum OrderItemStatus {
+  PENDING
+  PICKED
+  PACKED
+  SHIPPED
+}
+
+enum WarehouseRole {
+  MANAGER
+  SUPERVISOR
+  WORKER
+  PICKER
+  PACKER
+}
+
+enum AssignmentStatus {
+  ACTIVE
+  INACTIVE
+  ENDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  HOTPAY
+  BANK_TRANSFER
+  CASH
+  CARD
+}
